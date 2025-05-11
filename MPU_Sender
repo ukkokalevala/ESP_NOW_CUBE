@@ -1,0 +1,63 @@
+#include <ESP8266WiFi.h>
+#include <espnow.h>
+#include <Wire.h>
+#include <MPU6050.h>
+
+MPU6050 mpu;
+float angleX = 0, angleY = 0;
+
+// Replace this with your OLED receiver’s MAC address:
+uint8_t broadcastAddress[] = { 0xA0, 0x88, 0x08, 0x29, 0xE6, 0x19 }; // <--- Change this
+
+typedef struct {
+  float angleX;
+  float angleY;
+} OrientationData;
+
+OrientationData dataToSend;
+
+void sendOrientation() {
+  dataToSend.angleX = angleX;
+  dataToSend.angleY = angleY;
+  esp_now_send(broadcastAddress, (uint8_t *)&dataToSend, sizeof(dataToSend));
+}
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin();
+  mpu.initialize();
+  if (!mpu.testConnection()) {
+    Serial.println("MPU6050 connection failed");
+    while (1);
+  }
+
+  WiFi.mode(WIFI_STA);
+  if (esp_now_init() != 0) {
+    Serial.println("ESP-NOW init failed");
+    while (1);
+  }
+
+  esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+  esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
+
+  Serial.println("MPU6050 + ESP-NOW Sender Ready");
+}
+
+void loop() {
+  int16_t ax, ay, az, gx, gy, gz;
+  mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+
+  // Simple pitch/roll estimation from accelerometer
+  angleX = atan2(ay, az) * 180 / PI;
+  angleY = atan2(ax, az) * 180 / PI;
+
+  sendOrientation();
+
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 1000) {
+    lastPrint = millis();
+    Serial.println("Sent orientation");
+  }
+
+  delay(50);
+}

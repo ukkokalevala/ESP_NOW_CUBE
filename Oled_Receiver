@@ -1,0 +1,108 @@
+#include <Wire.h>
+#include <ESP8266WiFi.h>
+#include <espnow.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Structure for received data
+typedef struct struct_message {
+  float angleX;
+  float angleY;
+} struct_message;
+
+struct_message incomingData;
+
+float angleX = 0, angleY = 0;
+float smoothFactor = 0.9;
+
+// Define square cube size
+const float size = 40;
+const float hs = size / 2;  // half-size
+
+// Vertices of a cube (no perspective, just flat rotation)
+float cube[8][3] = {
+  {-hs, -hs, -hs}, { hs, -hs, -hs}, { hs,  hs, -hs}, { -hs,  hs, -hs},
+  {-hs, -hs,  hs}, { hs, -hs,  hs}, { hs,  hs,  hs}, { -hs,  hs,  hs}
+};
+
+void drawLine(float *v1, float *v2) {
+  display.drawLine(v1[0], v1[1], v2[0], v2[1], WHITE);
+}
+
+void drawCube(float pitch, float roll) {
+  float rotated[8][2];
+
+  for (int i = 0; i < 8; i++) {
+    float x = cube[i][0];
+    float y = cube[i][1];
+    float z = cube[i][2];
+
+    // Rotate around X (pitch)
+    float y1 = y * cos(pitch) - z * sin(pitch);
+    float z1 = y * sin(pitch) + z * cos(pitch);
+
+    // Rotate around Y (roll)
+    float x1 = x * cos(roll) + z1 * sin(roll);
+    float z2 = -x * sin(roll) + z1 * cos(roll);
+
+    // 2D projection without perspective
+    rotated[i][0] = SCREEN_WIDTH / 2 + x1;
+    rotated[i][1] = SCREEN_HEIGHT / 2 + y1;
+  }
+
+  // Edges
+  drawLine(rotated[0], rotated[1]);
+  drawLine(rotated[1], rotated[2]);
+  drawLine(rotated[2], rotated[3]);
+  drawLine(rotated[3], rotated[0]);
+
+  drawLine(rotated[4], rotated[5]);
+  drawLine(rotated[5], rotated[6]);
+  drawLine(rotated[6], rotated[7]);
+  drawLine(rotated[7], rotated[4]);
+
+  drawLine(rotated[0], rotated[4]);
+  drawLine(rotated[1], rotated[5]);
+  drawLine(rotated[2], rotated[6]);
+  drawLine(rotated[3], rotated[7]);
+
+  // Draw X on front face (0-1-2-3)
+  drawLine(rotated[0], rotated[2]);
+  drawLine(rotated[1], rotated[3]);
+}
+
+void OnDataRecv(uint8_t *mac, uint8_t *incomingDataRaw, uint8_t len) {
+  memcpy(&incomingData, incomingDataRaw, sizeof(incomingData));
+
+  // Apply smoothing
+  angleX = smoothFactor * angleX + (1.0 - smoothFactor) * incomingData.angleX;
+  angleY = smoothFactor * angleY + (1.0 - smoothFactor) * incomingData.angleY;
+}
+
+void setup() {
+  Wire.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  display.display();
+
+  WiFi.mode(WIFI_STA);
+  Serial.print("RSeceiver MAC Address: ");
+  Serial.println(WiFi.macAddress());
+  if (esp_now_init() != 0) {
+    return;
+  }
+  esp_now_set_self_role(ESP_NOW_ROLE_SLAVE);
+  esp_now_register_recv_cb(OnDataRecv);
+}
+
+void loop() {
+  display.clearDisplay();
+  drawCube(radians(angleX), radians(angleY));
+  display.display();
+  delay(20);
+}
